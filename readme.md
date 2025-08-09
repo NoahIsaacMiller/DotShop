@@ -1,6 +1,5 @@
 # 点阵小铺 (DotShop)
 
-![DotShop Logo](docs/resources/logo.png)
 
 一款专注于屏幕取模的实用工具，轻松将文字、图像、动态GIF和视频转换为适配多种屏幕的点阵数据，支持多语言代码输出，让嵌入式屏幕显示开发更高效。
 
@@ -19,8 +18,6 @@
 - **多语言输出**：
   - C语言数组
   - Python列表/字节流
-  - JavaScript Uint8Array
-  - 支持扩展更多语言
 
 - **便捷工具特性**：
   - 可视化预览取模效果
@@ -141,6 +138,3 @@ dotshop/
 4. 推送到分支 (`git push origin feature/amazing-feature`)
 5. 打开 Pull Request
 
-## 📞 联系我们
-
-如有问题或建议，请提交 [Issue](https://github.com/yourusername/dotshop/issues) 或发送邮件至 contact@dotshop.example
