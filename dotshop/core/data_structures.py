@@ -1,5 +1,4 @@
-from typing import Literal, Tuple, Optional, Dict, Any, List, Union
-from dataclasses import dataclass, field
+from typing import Tuple, Optional, Dict, Any, List, Union
 from enum import Enum, auto
 import numpy as np
 import copy
@@ -28,8 +27,8 @@ class ScanDirection(Enum):
     VERTICAL = auto()                       # 垂直扫描(从上到下)
     HORIZONTAL_REVERSED = auto()            # 水平反向扫描(从右到左)
     VERTICAL_REVERSED = auto()              # 垂直反向扫描(从下到上)
-    VERTICAL_BY_PAGE = auto()               # 按页垂直扫描
-    VERTICAL_REVERSED_BY_PAGE = auto()      # 按页垂直反向扫描
+    BY_PAGE = auto()                        # 按页扫描
+    BY_PAGE_REVERSED = auto()               # 按页反向扫描
 
     def __str__(self) -> str:
         """返回小写字符串表示,与原始魔法值兼容"""
@@ -221,7 +220,7 @@ class PixelMatrix:
         """
         self.__is_coordinate_out_of_range_ex(x, y)
         
-        pixel = self.__matrix[x, y]
+        pixel = self.__matrix[y, x]
         
         # 统一转换为元组格式输出
         if not isinstance(pixel, (tuple, np.ndarray)):
@@ -401,14 +400,14 @@ class PixelMatrix:
 
     @staticmethod
     def from_image(image: Image.Image, mode: Optional[ColorMode] = None) -> "PixelMatrix":
-        """从PIL Image对象创建PixelMatrix(支持自动模式推导和RGB565转换)
+        """从PIL Image对象创建PixelMatrix(支持自动模式推导和精确的像素格式转换)
         
         Args:
             image: PIL Image对象
             mode: 目标颜色模式,若为None则自动推导
             
         Returns:
-            新的PixelMatrix实例
+            新的PixelMatrix实例,矩阵中存储正确格式的像素数据
         """
         # 自动推导目标模式(若未指定)
         if mode is None:
@@ -420,34 +419,61 @@ class PixelMatrix:
             }
             mode = mode_map.get(image.mode, ColorMode.RGB_888)  # 默认转为RGB888
         
-        # 处理RGB565模式: 需从其他模式手动转换
+        # 处理RGB565模式: 从其他模式精确转换为16位RGB565格式
         if mode == ColorMode.RGB565:
-            # 先将图像转为RGB模式(确保三通道数据)
+            # 先将图像转为RGB模式(确保三通道8位数据)
             rgb_image = image.convert("RGB")
             # 转换为numpy数组(RGB888格式)
             rgb_data = np.array(rgb_image, dtype=np.uint8)
-            # 提取R、G、B通道并压缩为RGB565格式
-            r = (rgb_data[..., 0] >> 3) & 0x1F  # 取高5位
-            g = (rgb_data[..., 1] >> 2) & 0x3F  # 取高6位
-            b = (rgb_data[..., 2] >> 3) & 0x1F  # 取高5位
-            # 组合为16位整数(R<<11 | G<<5 | B)
+            
+            # 提取R、G、B通道并精确压缩为RGB565格式
+            # 红色通道取高5位 (8位 → 5位)
+            r = (rgb_data[..., 0] >> 3) & 0x1F  # 0x1F = 0b11111
+            # 绿色通道取高6位 (8位 → 6位)
+            g = (rgb_data[..., 1] >> 2) & 0x3F  # 0x3F = 0b111111
+            # 蓝色通道取高5位 (8位 → 5位)
+            b = (rgb_data[..., 2] >> 3) & 0x1F  # 0x1F = 0b11111
+            
+            # 组合为16位整数 (R<<11 | G<<5 | B)
             rgb565_data = (r << 11) | (g << 5) | b
-            # 创建RGB565模式的PixelMatrix
+            
+            # 创建RGB565模式的PixelMatrix,确保数据类型为uint16
             return PixelMatrix(rgb565_data.astype(np.uint16), ColorMode.RGB565)
         
-        # 处理其他模式: 直接转换为对应格式
-        # 先将PIL图像转为目标模式对应的PIL模式(确保数据兼容)
-        pil_mode_map = {
-            ColorMode.MONO: "1",
-            ColorMode.GRAY_8: "L",
-            ColorMode.RGB_888: "RGB",
-            ColorMode.RGB_8888: "RGBA"
-        }
-        target_pil_mode = pil_mode_map[mode]
-        converted_image = image.convert(target_pil_mode)
-        # 转换为numpy数组并创建实例
-        image_data = np.array(converted_image, dtype=_VALID_MODES[mode]["dtype"])
-        return PixelMatrix(image_data, mode)
+        # 处理二值模式: 转换为布尔数组
+        elif mode == ColorMode.MONO:
+            # 转换为二值图像(1位)
+            mono_image = image.convert("1")
+            # 转换为布尔数组(True表示白色,False表示黑色)
+            mono_data = np.array(mono_image, dtype=np.bool_)
+            return PixelMatrix(mono_data, ColorMode.MONO)
+        
+        # 处理8位灰度模式
+        elif mode == ColorMode.GRAY_8:
+            # 转换为8位灰度图像
+            gray_image = image.convert("L")
+            # 转换为uint8数组
+            gray_data = np.array(gray_image, dtype=np.uint8)
+            return PixelMatrix(gray_data, ColorMode.GRAY_8)
+        
+        # 处理RGB888模式
+        elif mode == ColorMode.RGB_888:
+            # 转换为RGB模式
+            rgb_image = image.convert("RGB")
+            # 转换为uint8数组,形状为(height, width, 3)
+            rgb_data = np.array(rgb_image, dtype=np.uint8)
+            return PixelMatrix(rgb_data, ColorMode.RGB_888)
+        
+        # 处理RGB8888模式
+        elif mode == ColorMode.RGB_8888:
+            # 转换为RGBA模式
+            rgba_image = image.convert("RGBA")
+            # 转换为uint8数组,形状为(height, width, 4)
+            rgba_data = np.array(rgba_image, dtype=np.uint8)
+            return PixelMatrix(rgba_data, ColorMode.RGB_8888)
+        
+        # 未知模式(理论上不会执行到这里,因为有前面的验证)
+        raise ValueError(f"不支持的目标模式: {mode}")
     
     def to_image(self) -> Image.Image:
         """转换为PIL Image对象(便于预览、保存)
@@ -467,6 +493,7 @@ class PixelMatrix:
         # 特殊处理RGB565转RGB888(需解码16位数据)
         if self.mode == ColorMode.RGB565:
             rgb_data = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+            # 从16位数据中提取各通道并扩展为8位
             rgb_data[..., 0] = ((self.__matrix >> 11) & 0x1F) << 3  # R5→R8
             rgb_data[..., 1] = ((self.__matrix >> 5) & 0x3F) << 2   # G6→G8
             rgb_data[..., 2] = (self.__matrix & 0x1F) << 3          # B5→B8
@@ -485,10 +512,16 @@ class PixelMatrix:
     def to_bytes(self) -> bytes:
         """将像素数据转换为字节流(用于硬件传输)
         
-        Raises:
-            NotImplementedError: 方法尚未实现
+        Returns:
+            按像素顺序排列的字节流
         """
-        raise NotImplementedError("尚未实现PixelMatrix的to_bytes方法")
+        # 根据不同模式转换为字节流
+        if self.mode == ColorMode.MONO:
+            # 二值模式按字节打包
+            return np.packbits(self.__matrix).tobytes()
+        else:
+            # 其他模式直接转换为字节
+            return self.__matrix.tobytes()
     
     def convert_mode(self, mode: ColorMode) -> "PixelMatrix":
         """转换为指定的颜色模式
@@ -499,8 +532,130 @@ class PixelMatrix:
         Returns:
             转换后的新PixelMatrix实例
         """
-        #  TODO: 实现不同模式间的转换逻辑
-        return PixelMatrix(self.matrix, mode)
+        validate_mode_ex(mode)
+        
+        # 如果已是目标模式,直接返回副本
+        if self.mode == mode:
+            return self.copy()
+        
+        # 模式转换逻辑
+        if mode == ColorMode.MONO:
+            # 从其他模式转为二值模式
+            if self.mode == ColorMode.GRAY_8:
+                # 灰度转二值(阈值128)
+                data = self.__matrix > 128
+                return PixelMatrix(data.astype(np.bool_), ColorMode.MONO)
+            elif self.mode in [ColorMode.RGB_888, ColorMode.RGB_8888]:
+                # RGB转灰度再转二值
+                gray = np.mean(self.__matrix[..., :3], axis=2).astype(np.uint8)
+                data = gray > 128
+                return PixelMatrix(data.astype(np.bool_), ColorMode.MONO)
+            elif self.mode == ColorMode.RGB565:
+                # RGB565先转RGB888再转二值
+                rgb_data = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+                rgb_data[..., 0] = ((self.__matrix >> 11) & 0x1F) << 3
+                rgb_data[..., 1] = ((self.__matrix >> 5) & 0x3F) << 2
+                rgb_data[..., 2] = (self.__matrix & 0x1F) << 3
+                gray = np.mean(rgb_data, axis=2).astype(np.uint8)
+                data = gray > 128
+                return PixelMatrix(data.astype(np.bool_), ColorMode.MONO)
+        
+        elif mode == ColorMode.GRAY_8:
+            # 从其他模式转为8位灰度
+            if self.mode == ColorMode.MONO:
+                # 二值转灰度
+                data = self.__matrix.astype(np.uint8) * 255
+                return PixelMatrix(data, ColorMode.GRAY_8)
+            elif self.mode in [ColorMode.RGB_888, ColorMode.RGB_8888]:
+                # RGB转灰度(使用 luminance 公式)
+                gray = 0.299 * self.__matrix[..., 0] + 0.587 * self.__matrix[..., 1] + 0.114 * self.__matrix[..., 2]
+                return PixelMatrix(gray.astype(np.uint8), ColorMode.GRAY_8)
+            elif self.mode == ColorMode.RGB565:
+                # RGB565先转RGB888再转灰度
+                rgb_data = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+                rgb_data[..., 0] = ((self.__matrix >> 11) & 0x1F) << 3
+                rgb_data[..., 1] = ((self.__matrix >> 5) & 0x3F) << 2
+                rgb_data[..., 2] = (self.__matrix & 0x1F) << 3
+                gray = 0.299 * rgb_data[..., 0] + 0.587 * rgb_data[..., 1] + 0.114 * rgb_data[..., 2]
+                return PixelMatrix(gray.astype(np.uint8), ColorMode.GRAY_8)
+        
+        elif mode == ColorMode.RGB_888:
+            # 从其他模式转为RGB888
+            if self.mode == ColorMode.MONO:
+                # 二值转RGB
+                gray = self.__matrix.astype(np.uint8) * 255
+                data = np.stack([gray, gray, gray], axis=2)
+                return PixelMatrix(data, ColorMode.RGB_888)
+            elif self.mode == ColorMode.GRAY_8:
+                # 灰度转RGB
+                data = np.stack([self.__matrix, self.__matrix, self.__matrix], axis=2)
+                return PixelMatrix(data, ColorMode.RGB_888)
+            elif self.mode == ColorMode.RGB_8888:
+                # RGBA转RGB(忽略Alpha通道)
+                return PixelMatrix(self.__matrix[..., :3].copy(), ColorMode.RGB_888)
+            elif self.mode == ColorMode.RGB565:
+                # RGB565转RGB888
+                data = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+                data[..., 0] = ((self.__matrix >> 11) & 0x1F) << 3
+                data[..., 1] = ((self.__matrix >> 5) & 0x3F) << 2
+                data[..., 2] = (self.__matrix & 0x1F) << 3
+                return PixelMatrix(data, ColorMode.RGB_888)
+        
+        elif mode == ColorMode.RGB_8888:
+            # 从其他模式转为RGB8888
+            if self.mode == ColorMode.MONO:
+                # 二值转RGBA
+                gray = self.__matrix.astype(np.uint8) * 255
+                alpha = np.full_like(gray, 255, dtype=np.uint8)
+                data = np.stack([gray, gray, gray, alpha], axis=2)
+                return PixelMatrix(data, ColorMode.RGB_8888)
+            elif self.mode == ColorMode.GRAY_8:
+                # 灰度转RGBA
+                alpha = np.full_like(self.__matrix, 255, dtype=np.uint8)
+                data = np.stack([self.__matrix, self.__matrix, self.__matrix, alpha], axis=2)
+                return PixelMatrix(data, ColorMode.RGB_8888)
+            elif self.mode == ColorMode.RGB_888:
+                # RGB转RGBA(添加不透明Alpha通道)
+                alpha = np.full((self.height, self.width), 255, dtype=np.uint8)
+                data = np.concatenate([self.__matrix, alpha[..., np.newaxis]], axis=2)
+                return PixelMatrix(data, ColorMode.RGB_8888)
+            elif self.mode == ColorMode.RGB565:
+                # RGB565转RGBA
+                rgb_data = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+                rgb_data[..., 0] = ((self.__matrix >> 11) & 0x1F) << 3
+                rgb_data[..., 1] = ((self.__matrix >> 5) & 0x3F) << 2
+                rgb_data[..., 2] = (self.__matrix & 0x1F) << 3
+                alpha = np.full((self.height, self.width), 255, dtype=np.uint8)
+                data = np.concatenate([rgb_data, alpha[..., np.newaxis]], axis=2)
+                return PixelMatrix(data, ColorMode.RGB_8888)
+        
+        elif mode == ColorMode.RGB565:
+            # 从其他模式转为RGB565
+            if self.mode == ColorMode.MONO:
+                # 二值转RGB565(灰色)
+                gray = self.__matrix.astype(np.uint8) * 255
+                r = (gray >> 3) & 0x1F
+                g = (gray >> 2) & 0x3F
+                b = (gray >> 3) & 0x1F
+                data = (r << 11) | (g << 5) | b
+                return PixelMatrix(data.astype(np.uint16), ColorMode.RGB565)
+            elif self.mode == ColorMode.GRAY_8:
+                # 灰度转RGB565(灰色)
+                r = (self.__matrix >> 3) & 0x1F
+                g = (self.__matrix >> 2) & 0x3F
+                b = (self.__matrix >> 3) & 0x1F
+                data = (r << 11) | (g << 5) | b
+                return PixelMatrix(data.astype(np.uint16), ColorMode.RGB565)
+            elif self.mode in [ColorMode.RGB_888, ColorMode.RGB_8888]:
+                # RGB转RGB565
+                r = (self.__matrix[..., 0] >> 3) & 0x1F
+                g = (self.__matrix[..., 1] >> 2) & 0x3F
+                b = (self.__matrix[..., 2] >> 3) & 0x1F
+                data = (r << 11) | (g << 5) | b
+                return PixelMatrix(data.astype(np.uint16), ColorMode.RGB565)
+        
+        # 无法转换的模式组合(理论上不会执行到这里)
+        raise NotImplementedError(f"不支持从 {self.mode} 转换到 {mode}")
     
     def copy(self) -> "PixelMatrix":
         """创建当前像素矩阵的深拷贝
@@ -555,7 +710,8 @@ class Frame:
     def from_image(
         image: Image.Image, 
         timestamp: float = 0.0, 
-        frame_index: int = 0
+        frame_index: int = 0,
+        mode: Optional[ColorMode] = None
     ) -> "Frame":
         """从PIL Image对象创建Frame
         
@@ -563,11 +719,12 @@ class Frame:
             image: PIL Image对象
             timestamp: 帧的时间戳(秒),默认为0.0
             frame_index: 帧在序列中的索引,默认为0
+            mode: 目标颜色模式,若为None则自动推导
             
         Returns:
             新的Frame实例
         """
-        return Frame(PixelMatrix.from_image(image), timestamp, frame_index)
+        return Frame(PixelMatrix.from_image(image, mode), timestamp, frame_index)
     
     @staticmethod
     def from_pixel_matrix(
@@ -751,168 +908,230 @@ class Frame:
 # 屏幕配置类: 封装硬件相关参数
 # ------------------------------
 class ScreenConfig:
-    """屏幕配置数据类,封装所有硬件相关参数
+    """可变的屏幕配置类，封装显示设备硬件参数并支持运行时调整
     
-    该类定义了显示设备的硬件特性,包括分辨率、支持的颜色模式、
-    扫描方向等,用于确保图像数据与硬件兼容。
+    管理屏幕的硬件特性参数，包括分辨率、支持的色彩模式、扫描方向等，
+    确保所有参数修改都经过合法性验证，维持配置数据的有效性。
     """
     
-    # ------------------------------
-    # 核心字段(硬件标识与基础参数)
-    # ------------------------------
-    width: int  # 屏幕宽度(像素)
-    height: int  # 屏幕高度(像素)
-    screen_type: ScreenType  # 屏幕硬件类型
-    
-    # ------------------------------
-    # 扫描与数据传输相关字段
-    # ------------------------------
-    scan_direction: ScanDirection = ScanDirection.HORIZONTAL  # 扫描方向
-    bit_order: BitOrder = BitOrder.MSB_FIRST  # 位序
-    row_offset: int = 0  # 行偏移量(硬件校准用)
-    col_offset: int = 0  # 列偏移量(硬件校准用)
-    
-    # ------------------------------
-    # 扩展元数据
-    # ------------------------------
-    metadata: Dict[str, Any] = field(default_factory=dict)  # 额外硬件信息
-    
-    
-    def __init__(self, width, height,
-                scan_direction: ScanDirection=ScanDirection.HORIZONTAL,
-                bit_order: BitOrder=BitOrder.MSB_FIRST,
-                row_offset: int=0,
-                col_offset: int=0,
-                metadata: Dict[str, Any] = dict()
-            ):
-        self.width = width
-        self.height = height
-        self.scan_direction = scan_direction
-        self.bit_order = bit_order
-        self.row_offset = row_offset
-        self.col_offset = col_offset
-        self.metadata = metadata
+    def __init__(self, 
+                width: int, 
+                height: int, 
+                supported_modes: List[ColorMode],
+                scan_direction: ScanDirection = ScanDirection.HORIZONTAL,
+                bit_order: BitOrder = BitOrder.MSB_FIRST,
+                row_offset: int = 0,
+                col_offset: int = 0,
+                metadata: Dict[str, Any] = None):
+        """初始化屏幕配置参数
         
-    
-    
-    # ------------------------------
-    # 初始化校验方法
-    # ------------------------------
-    def __post_init__(self):
-        """初始化后自动校验参数合法性"""
-        self._validate_resolution()
-    
-    def _validate_resolution(self) -> None:
-        """校验分辨率为正整数
-        
-        Raises:
-            ValueError: 当分辨率为非正整数时抛出
+        Args:
+            width: 屏幕宽度(像素)
+            height: 屏幕高度(像素)
+            supported_modes: 支持的色彩模式列表
+            scan_direction: 像素扫描方向
+            bit_order: 数据位序
+            row_offset: 行偏移量(硬件校准)
+            col_offset: 列偏移量(硬件校准)
+            metadata: 额外硬件信息
         """
-        if self.width <= 0 or self.height <= 0 or type(self.width) != int or type(self.height) != int:
-            raise ValueError(f"无效分辨率: 宽={self.width}, 高={self.height}(必须为正整数)")
-    
-    def _validate_color_mode(self) -> None:
-        """校验当前色彩模式在支持列表中
+        # 初始化私有变量
+        self._width = width
+        self._height = height
+        self._supported_modes = list(supported_modes)
+        self._scan_direction = scan_direction
+        self._bit_order = bit_order
+        self._row_offset = row_offset
+        self._col_offset = col_offset
+        self._metadata = metadata.copy() if metadata else {}
         
-        Raises:
-            ValueError: 当前模式不在支持列表中时抛出
-        """
-        if self.color_mode not in self.supported_modes:
-            supported = [str(m) for m in self.supported_modes]
-            raise ValueError(
-                f"不支持的色彩模式: {self.color_mode},支持模式: {supported}"
-            )
+        # 验证初始参数合法性
+        self._validate_basic_params()
+        self._validate_supported_modes()
     
     # ------------------------------
-    # 核心属性访问方法
+    # 参数验证方法
+    # ------------------------------
+    def _validate_basic_params(self) -> None:
+        """验证基础参数的合法性"""
+        if not isinstance(self._width, int) or self._width <= 0:
+            raise ValueError(f"宽度必须为正整数，实际为{self._width}")
+            
+        if not isinstance(self._height, int) or self._height <= 0:
+            raise ValueError(f"高度必须为正整数，实际为{self._height}")
+            
+        if not isinstance(self._row_offset, int) or self._row_offset < 0:
+            raise ValueError(f"行偏移量必须为非负整数，实际为{self._row_offset}")
+            
+        if not isinstance(self._col_offset, int) or self._col_offset < 0:
+            raise ValueError(f"列偏移量必须为非负整数，实际为{self._col_offset}")
+    
+    def _validate_supported_modes(self) -> None:
+        """验证支持的色彩模式列表"""
+        if not self._supported_modes:
+            raise ValueError("屏幕必须至少支持一种色彩模式")
+            
+        for mode in self._supported_modes:
+            if not isinstance(mode, ColorMode):
+                raise TypeError(f"色彩模式必须为ColorMode枚举，实际为{type(mode)}")
+    
+    # ------------------------------
+    # 属性访问器与修改器
+    # ------------------------------
+    @property
+    def width(self) -> int:
+        return self._width
+    
+    @width.setter
+    def width(self, value: int) -> None:
+        if not isinstance(value, int) or value <= 0:
+            raise ValueError(f"宽度必须为正整数，实际为{value}")
+        self._width = value
+    
+    @property
+    def height(self) -> int:
+        return self._height
+    
+    @height.setter
+    def height(self, value: int) -> None:
+        if not isinstance(value, int) or value <= 0:
+            raise ValueError(f"高度必须为正整数，实际为{value}")
+        self._height = value
+    
+    @property
+    def supported_modes(self) -> List[ColorMode]:
+        return self._supported_modes.copy()  # 返回副本防止外部直接修改
+    
+    @property
+    def scan_direction(self) -> ScanDirection:
+        return self._scan_direction
+    
+    @scan_direction.setter
+    def scan_direction(self, value: ScanDirection) -> None:
+        if not isinstance(value, ScanDirection):
+            raise TypeError(f"扫描方向必须为ScanDirection枚举，实际为{type(value)}")
+        self._scan_direction = value
+    
+    @property
+    def bit_order(self) -> BitOrder:
+        return self._bit_order
+    
+    @bit_order.setter
+    def bit_order(self, value: BitOrder) -> None:
+        if not isinstance(value, BitOrder):
+            raise TypeError(f"位序必须为BitOrder枚举，实际为{type(value)}")
+        self._bit_order = value
+    
+    @property
+    def row_offset(self) -> int:
+        return self._row_offset
+    
+    @row_offset.setter
+    def row_offset(self, value: int) -> None:
+        if not isinstance(value, int) or value < 0:
+            raise ValueError(f"行偏移量必须为非负整数，实际为{value}")
+        self._row_offset = value
+    
+    @property
+    def col_offset(self) -> int:
+        return self._col_offset
+    
+    @col_offset.setter
+    def col_offset(self, value: int) -> None:
+        if not isinstance(value, int) or value < 0:
+            raise ValueError(f"列偏移量必须为非负整数，实际为{value}")
+        self._col_offset = value
+    
+    @property
+    def metadata(self) -> Dict[str, Any]:
+        return self._metadata.copy()  # 返回副本防止外部直接修改
+    
+    # ------------------------------
+    # 只读属性
     # ------------------------------
     @property
     def resolution(self) -> Tuple[int, int]:
         """返回分辨率元组 (宽, 高)"""
-        return (self.width, self.height)
+        return (self._width, self._height)
     
     @property
     def pixel_count(self) -> int:
         """返回总像素数"""
-        return self.width * self.height
-    
+        return self._width * self._height
     
     # ------------------------------
-    # 功能校验方法
+    # 支持模式管理方法
+    # ------------------------------
+    def add_supported_mode(self, mode: ColorMode) -> None:
+        """添加支持的色彩模式"""
+        if not isinstance(mode, ColorMode):
+            raise TypeError(f"色彩模式必须为ColorMode枚举，实际为{type(mode)}")
+        if mode not in self._supported_modes:
+            self._supported_modes.append(mode)
+    
+    def remove_supported_mode(self, mode: ColorMode) -> None:
+        """移除支持的色彩模式"""
+        if len(self._supported_modes) <= 1:
+            raise ValueError("至少需保留一种支持的色彩模式")
+        if mode in self._supported_modes:
+            self._supported_modes.remove(mode)
+    
+    # ------------------------------
+    # 元数据管理方法
+    # ------------------------------
+    def update_metadata(self, key: str, value: Any) -> None:
+        """更新元数据"""
+        self._metadata[key] = value
+    
+    def remove_metadata(self, key: str) -> None:
+        """移除元数据"""
+        if key in self._metadata:
+            del self._metadata[key]
+    
+    # ------------------------------
+    # 功能检查方法
     # ------------------------------
     def supports_mode(self, mode: ColorMode) -> bool:
-        """检查屏幕是否支持指定色彩模式
-        
-        Args:
-            mode: 待检查的颜色模式
-            
-        Returns:
-            支持则返回True,否则返回False
-        """
-        return mode in self.supported_modes
+        """检查是否支持指定色彩模式"""
+        return mode in self._supported_modes
     
-    def is_compatible_with(self, matrix: PixelMatrix) -> bool:
-        """检查像素矩阵是否与当前屏幕配置兼容(分辨率+色彩模式)
-        
-        Args:
-            matrix: 待检查的PixelMatrix对象
-            
-        Returns:
-            兼容则返回True,否则返回False
-        """
-        return (matrix.width == self.width 
-                and matrix.height == self.height 
+    def is_compatible_with(self, matrix: 'PixelMatrix') -> bool:
+        """检查与像素矩阵的兼容性"""
+        return (matrix.width == self._width 
+                and matrix.height == self._height 
                 and self.supports_mode(matrix.mode))
     
-    
     # ------------------------------
-    # 序列化方法
+    # 序列化与反序列化
     # ------------------------------
     def to_dict(self) -> Dict[str, Any]:
-        """转换为字典,用于配置存储或传输
-        
-        Returns:
-            包含所有配置信息的字典
-        """
+        """转换为字典用于存储或传输"""
         return {
-            "screen_type": str(self.screen_type),
-            "color_mode": str(self.color_mode),
-            "supported_modes": [str(m) for m in self.supported_modes],
-            "scan_direction": str(self.scan_direction),
-            "bit_order": str(self.bit_order),
-            "row_offset": self.row_offset,
-            "col_offset": self.col_offset,
-            "metadata": self.metadata
+            "width": self._width,
+            "height": self._height,
+            "supported_modes": [mode.value for mode in self._supported_modes],
+            "scan_direction": self._scan_direction.value,
+            "bit_order": self._bit_order.value,
+            "row_offset": self._row_offset,
+            "col_offset": self._col_offset,
+            "metadata": self._metadata.copy()
         }
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ScreenConfig":
-        """从字典创建实例,用于配置加载
-        
-        Args:
-            data: 包含配置信息的字典
-            
-        Returns:
-            新的ScreenConfig实例
-        """
-        # 转换字符串为枚举类型
-        screen_type = ScreenType[data["screen_type"].upper()]
-        color_mode = ColorMode[data["color_mode"].upper()]
-        supported_modes = [
-            ColorMode[m.upper()] for m in data["supported_modes"]
-        ]
-        scan_direction = ScanDirection[data.get("scan_direction", "horizontal").upper()]
-        bit_order = BitOrder[data.get("bit_order", "msb_first").upper()]
-        
+        """从字典创建配置实例"""
         return cls(
-            width=data["resolution"][0],
-            height=data["resolution"][1],
-            screen_type=screen_type,
-            color_mode=color_mode,
-            supported_modes=supported_modes,
-            scan_direction=scan_direction,
-            bit_order=bit_order,
+            width=data["width"],
+            height=data["height"],
+            supported_modes=[ColorMode(m) for m in data["supported_modes"]],
+            scan_direction=ScanDirection(data.get("scan_direction", ScanDirection.HORIZONTAL.value)),
+            bit_order=BitOrder(data.get("bit_order", BitOrder.MSB_FIRST.value)),
             row_offset=data.get("row_offset", 0),
             col_offset=data.get("col_offset", 0),
             metadata=data.get("metadata", {})
         )
+    
+    def __repr__(self) -> str:
+        return (f"<ScreenConfig (resolution={self.width}x{self.height}, "
+                f"modes={[m.value for m in self.supported_modes]})>")
+    
